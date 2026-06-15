@@ -377,10 +377,9 @@ export class GaussianSplatRenderer {
       bGeo.attributes.splatSize.needsUpdate    = true;
     }
 
-    // -- Update node positions (legacy single-node) ------------------------
-    if (nodes.length > 0 && nodes[0].position) {
-      const pos = nodes[0].position;
-      this.nodeMarker.position.set(pos[0], 0.5, pos[2]);
+    // -- Hide legacy single-node marker since we use dynamic markers now --
+    if (this.nodeMarker) {
+      this.nodeMarker.visible = false;
     }
 
     // -- Update dynamic per-node markers (multi-node support) --------------
@@ -388,6 +387,8 @@ export class GaussianSplatRenderer {
       const THREE = this._THREE || window.THREE;
       if (THREE) {
         const activeIds = new Set();
+        let index = 0;
+        
         for (const node of nodes) {
           activeIds.add(node.node_id);
           if (!this.nodeMarkers.has(node.node_id)) {
@@ -402,8 +403,21 @@ export class GaussianSplatRenderer {
             this.nodeMarkers.set(node.node_id, marker);
           }
           const marker = this.nodeMarkers.get(node.node_id);
-          const pos = node.position || [0, 0, 0];
+          
+          // Use backend position if explicitly provided
+          let pos = node.position ? [...node.position] : [0, 0, 0];
+          
+          // DEMO BEAUTIFICATION: If coordinates are unconfigured (0,0) or 
+          // default from the Rust server (2.0, 1.5), automatically space them.
+          if ((pos[0] === 0 && pos[2] === 0) || (pos[0] === 2.0 && pos[2] === 1.5)) {
+            const radius = 3.5; // Radius of the deployment circle
+            const angle = (index / nodes.length) * Math.PI * 2;
+            pos[0] = Math.cos(angle) * radius;
+            pos[2] = Math.sin(angle) * radius;
+          }
+          
           marker.position.set(pos[0], 0.5, pos[2]);
+          index++;
         }
         // Remove stale markers
         for (const [id, marker] of this.nodeMarkers) {

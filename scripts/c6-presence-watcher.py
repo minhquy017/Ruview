@@ -52,6 +52,7 @@ from collections import deque
 
 RV_FEATURE_STATE_MAGIC = 0xC5110006
 RV_QFLAG_PRESENCE_VALID = 1 << 0
+RV_QFLAG_ANOMALY_TRIGGERED = 1 << 3
 PACKET_SIZE = 60
 
 
@@ -133,6 +134,7 @@ def parse_packet(buf: bytes):
         "anomaly": anomaly, "env_shift": env_shift, "coherence": coherence,
         "qflags": qflags, "crc_ok": crc_ok,
         "presence_valid": bool(qflags & RV_QFLAG_PRESENCE_VALID),
+        "fall_detected": bool(qflags & RV_QFLAG_ANOMALY_TRIGGERED),
     }
 
 
@@ -172,6 +174,7 @@ def apply_privacy_gate(pkt: dict, allowed_class: int) -> dict | None:
         return {
             "presence": pkt["presence"], "motion": pkt["motion"],
             "presence_valid": pkt["presence_valid"],
+            "fall_detected": pkt.get("fall_detected", False),
             "node_id": pkt["node_id"], "seq": pkt["seq"],
             # anomaly_score / env_shift / coherence dropped (could
             # reveal longitudinal drift signatures over time).
@@ -182,6 +185,7 @@ def apply_privacy_gate(pkt: dict, allowed_class: int) -> dict | None:
     return {
         "presence": pkt["presence"], "motion": pkt["motion"],
         "presence_valid": pkt["presence_valid"],
+        "fall_detected": pkt.get("fall_detected", False),
         "node_id": pkt["node_id"], "seq": pkt["seq"],
         "resp_bpm": pkt["resp_bpm"], "hb_bpm": pkt["hb_bpm"],
         "anomaly": pkt["anomaly"], "env_shift": pkt["env_shift"],
@@ -201,6 +205,8 @@ def main() -> int:
     p.add_argument("--state-json", default="/tmp/ruview-state.json",
                    help="JSON state IPC file written for the HAP daemon. "
                         "Contains motion/occupancy/anomaly_ts.")
+    p.add_argument("--feature-json", default="C:/tmp/ruview-last-feature.json",
+                   help="Feature state JSON file path (Windows-compatible).")
     p.add_argument("--occupancy-window", type=float, default=3.0,
                    help="Seconds of rolling presence_score average for "
                         "OccupancyDetected (vs short-window MotionDetected).")
@@ -258,12 +264,12 @@ def main() -> int:
     OCC_OFF_THRESH = 0.15
     state_path = args.state_json
 
-    def write_state(motion: bool, occupancy: bool, anomaly_ts: float) -> None:
+    def write_state(motion: bool, occupancy: bool, anomaly_ts: float, fall_detected: bool = False) -> None:
         try:
             tmp = state_path + ".tmp"
             with open(tmp, "w") as fh:
                 json.dump({"motion": motion, "occupancy": occupancy,
-                           "anomaly_ts": anomaly_ts, "ts": time.time()}, fh)
+                           "anomaly_ts": anomaly_ts, "fall_detected": fall_detected, "ts": time.time()}, fh)
             os.replace(tmp, state_path)
         except OSError:
             pass
@@ -272,7 +278,7 @@ def main() -> int:
     # @ruvnet/rvagent compatibility layer): write the full BFLD-gated
     # feature snapshot so the sensing-server can serve EdgeVitalsMessage
     # and BfldScanResponse without going back to the wire.
-    feature_path = "/tmp/ruview-last-feature.json"
+    feature_path = args.feature_json
 
     def write_feature(gated: dict, motion: bool, occupancy: bool,
                       privacy_cls: int) -> None:
@@ -292,6 +298,7 @@ def main() -> int:
                     "heartrate_bpm": (gated["hb_bpm"]
                                       if gated.get("hb_bpm") else None),
                     "anomaly_score": gated.get("anomaly"),
+                    "fall_detected": gated.get("fall_detected", False),
                     "privacy_class": privacy_cls,
                     "ts": time.time(),
                 }, fh)
@@ -364,9 +371,13 @@ def main() -> int:
                                   f"(anomaly={gated['anomaly']:.2f})",
                                   flush=True)
 
+                        fall_detected = gated.get("fall_detected", False)
+                        if fall_detected:
+                            print(f"[{time.strftime('%H:%M:%S')}] 🚨 NGÃ ĐƯỢC PHÁT HIỆN! (FALL DETECTED)", flush=True)
+
                         if (motion != prev_motion
-                                or not state_path.endswith(".disabled")):
-                            write_state(motion, occupancy, last_anomaly_ts)
+                                or not state_path.endswith(".disabled") or fall_detected):
+                            write_state(motion, occupancy, last_anomaly_ts, fall_detected)
                             write_feature(gated, motion, occupancy,
                                           privacy_class)
 
@@ -382,12 +393,25 @@ def main() -> int:
         if now - last_summary >= 10.0:
             avg_p = presence_sum / n_valid if n_valid else 0.0
             avg_m = motion_sum / n_valid if n_valid else 0.0
+            # Read latest vitals from feature JSON for display
+            hb_str = resp_str = "N/A"
+            try:
+                import json as _json
+                with open(feature_path, "r") as _fh:
+                    _feat = _json.load(_fh)
+                hb = _feat.get("heartrate_bpm")
+                resp = _feat.get("breathing_rate_bpm")
+                hb_str = f"{hb:.1f} bpm" if hb else "N/A"
+                resp_str = f"{resp:.1f} bpm" if resp else "N/A"
+            except Exception:
+                pass
             print(
                 f"[{time.strftime('%H:%M:%S')}] 10s stats: "
                 f"pkts={n_total} valid={n_valid} crc_bad={n_crc_bad} "
                 f"avg_presence={avg_p:.2f} avg_motion={avg_m:.2f} "
                 f"motion={motion} occupancy={occupancy} "
-                f"anomaly_fires={n_anomaly_fires}",
+                f"anomaly_fires={n_anomaly_fires} "
+                f"| heart={hb_str} breath={resp_str}",
                 flush=True,
             )
             n_total = n_valid = n_crc_bad = n_anomaly_fires = 0

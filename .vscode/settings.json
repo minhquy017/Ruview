@@ -1,0 +1,7 @@
+{
+    "idf.currentSetup": "D:\\.espressif\\v6.0.1\\esp-idf",
+    "idf.portWin": "COM9",
+    "idf.openOcdConfigs": [
+        "board/esp32s3-builtin.cfg"
+    ]
+}

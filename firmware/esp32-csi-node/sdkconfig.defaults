@@ -66,3 +66,22 @@ CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=y
 # Was present in sdkconfig.defaults.template but missing here — fixed
 # in the v0.6.5-esp32 release.
 CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=8192
+
+# ── SPIRAM / PSRAM (fix for ENOMEM / RuView#949) ─────────────────────────────
+# ESP32-S3 on this board has 8 MB OPI PSRAM (AP_3v3).
+# Enabling it moves WiFi + lwIP packet buffers into PSRAM, eliminating the
+# repeated `sendto ENOMEM — backing off 100 ms` that drops ~90 % of
+# feature_state packets.  Verified needed: esptool shows
+#   Features: Embedded PSRAM 8MB (AP_3v3)
+# but the disp_task boot log showed:
+#   W disp_task: SPIRAM not enabled — using internal DMA memory
+# because these keys were absent.  Adding them re-enables the 8 MB pool.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_BOOT_INIT=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=n
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_SPIRAM_MEMTEST=y
